@@ -1,0 +1,132 @@
+// Scenario library. Every scenario carries its own ground truth:
+//  - rr(t): true simulated breathing rate (breaths/min)
+//  - expected(tEnd): the outcome a *correct* system should report for the 30 s
+//    window ending at tEnd ('within' | 'concerning' | 'insufficient' | 'any').
+//    'any' marks transition windows that legitimately straddle two states.
+// The labels are the basis of the automated test suite.
+
+const ramp = (t, t0, t1, a, b) => (t <= t0 ? a : t >= t1 ? b : a + ((b - a) * (t - t0)) / (t1 - t0));
+const between = (t, a, b) => t > a && t <= b;
+
+export const SCENARIOS = [
+  {
+    id: 'normal_rest',
+    keyMoment: { t: 90, label: 'Steady rest' },
+    name: 'Normal breathing at rest',
+    summary: 'Steady breathing around 14/min while seated. The reference case.',
+    durationSec: 180,
+    rr: () => 14,
+    amp: () => 1,
+    expected: () => 'within',
+  },
+  {
+    id: 'walking',
+    notes: [{ t: 40, text: 'Starts walking' }, { t: 170, text: 'Stops walking' }],
+    keyMoment: { t: 120, label: 'Mid-walk: chest sensor swamped by gait' },
+    name: 'Walking with movement artefacts',
+    summary: 'Walking from 40 s to 170 s. The chest-motion signal is swamped by gait; a naive single-sensor monitor would read a false high rate.',
+    durationSec: 220,
+    activity: [{ from: 40, to: 170, type: 'walking' }],
+    rr: (t) => (t <= 170 ? ramp(t, 40, 70, 14, 18) : ramp(t, 170, 200, 18, 14)),
+    amp: (t) => (between(t, 40, 170) ? 1.2 : 1),
+    expected: () => 'within',
+  },
+  {
+    id: 'coughing',
+    keyMoment: { t: 70, label: 'Just after two coughs' },
+    name: 'Coughing',
+    summary: 'Five isolated coughs. Each produces a sharp motion and sound burst that should be excluded, not counted as breaths.',
+    durationSec: 180,
+    coughs: [35, 62, 66, 110, 150],
+    rr: () => 15,
+    amp: () => 1,
+    expected: () => 'within',
+  },
+  {
+    id: 'posture',
+    keyMoment: { t: 70, label: 'Just after lying down' },
+    name: 'Posture change',
+    summary: 'Patient moves from sitting to lying at 60 s and back at 125 s. The chest baseline shifts; breathing itself does not change.',
+    durationSec: 180,
+    postures: [{ t: 60, tilt: 70 }, { t: 125, tilt: 0 }],
+    rr: () => 14,
+    amp: (t) => (between(t, 60, 125) ? 0.8 : 1),
+    expected: () => 'within',
+  },
+  {
+    id: 'irregular',
+    notes: [{ t: 60, text: 'Breathing starts to speed up and become irregular (no movement)' }],
+    keyMoment: { t: 150, label: 'Sustained irregular breathing at rest' },
+    name: 'Sustained irregular breathing',
+    summary: 'At rest, breathing becomes faster (to ~26/min) and irregular from 60 s onwards. No movement explains it.',
+    durationSec: 220,
+    rr: (t) => ramp(t, 60, 90, 14, 26),
+    irregularity: (t) => (t > 60 ? 0.8 : 0),
+    amp: (t) => ramp(t, 60, 90, 1, 0.7),
+    expected: (t) => (t <= 60 ? 'within' : t <= 110 ? 'any' : 'concerning'),
+  },
+  {
+    id: 'hidden_change',
+    notes: [{ t: 80, text: 'While still walking, breathing starts rising and becoming shallow' }, { t: 200, text: 'Walk ends; breathing stays fast' }],
+    keyMoment: { t: 180, label: 'Still walking, breathing has risen to ~28/min' },
+    name: 'Respiratory change hidden by movement',
+    summary: 'The hard case. Patient walks from 40 s to 200 s. During the walk breathing rises to ~28/min and becomes shallow. Movement masks it on the chest sensor; a system that simply mutes alerts during activity would miss it.',
+    durationSec: 260,
+    activity: [{ from: 40, to: 200, type: 'walking' }],
+    rr: (t) => (t <= 80 ? ramp(t, 40, 60, 14, 17) : ramp(t, 80, 110, 17, 28)),
+    amp: (t) => ramp(t, 80, 110, 1.15, 0.75),
+    expected: (t) => (t <= 80 ? 'within' : t <= 140 ? 'any' : 'concerning'),
+  },
+  {
+    id: 'single_failure',
+    keyMoment: { t: 120, label: 'Chest sensor detached' },
+    name: 'One sensor failure',
+    summary: 'The chest-motion sensor flatlines (detached strap) at 60 s. The acoustic channel still works.',
+    durationSec: 180,
+    failures: [{ sensor: 'chest', from: 60, type: 'flatline' }],
+    rr: () => 15,
+    amp: () => 1,
+    expected: (t) => (t <= 60 ? 'within' : t <= 90 ? 'any' : 'within'),
+  },
+  {
+    id: 'multi_failure',
+    keyMoment: { t: 160, label: 'Both breathing sensors lost' },
+    name: 'Multiple sensor failures',
+    summary: 'Chest sensor flatlines at 50 s, acoustic channel drops out at 100 s. Only the motion sensor remains, which cannot measure breathing.',
+    durationSec: 200,
+    failures: [
+      { sensor: 'chest', from: 50, type: 'flatline' },
+      { sensor: 'acoustic', from: 100, type: 'dropout' },
+    ],
+    rr: () => 15,
+    amp: () => 1,
+    expected: (t) => (t <= 50 ? 'within' : t <= 80 ? 'any' : t <= 100 ? 'within' : t <= 130 ? 'any' : 'insufficient'),
+  },
+  {
+    id: 'recovery',
+    notes: [{ t: 0, text: 'Fast breathing at rest' }, { t: 90, text: 'Recovery towards baseline begins' }],
+    keyMoment: { t: 60, label: 'During the event, before recovery' },
+    name: 'Recovery after an event',
+    summary: 'Starts with fast breathing (~26/min) at rest, then recovers to ~15/min between 90 s and 130 s.',
+    durationSec: 240,
+    rr: (t) => ramp(t, 90, 130, 26, 15),
+    irregularity: (t) => (t < 100 ? 0.4 : 0),
+    amp: (t) => ramp(t, 90, 130, 0.75, 1),
+    expected: (t) => (t <= 90 ? 'concerning' : t <= 165 ? 'any' : 'within'),
+  },
+  {
+    id: 'ambiguous',
+    notes: [{ t: 0, text: 'Fidgeting in a noisy room throughout' }],
+    keyMoment: { t: 90, label: 'Fidgeting in a noisy room' },
+    name: 'Ambiguous or unreliable signals',
+    summary: 'Fidgeting in a noisy room. True breathing is mildly elevated (~22/min), but neither sensor gives trustworthy evidence. The correct answer is "insufficient reliable data", not reassurance.',
+    durationSec: 180,
+    activity: [{ from: 0, to: 180, type: 'fidget' }],
+    ambientNoise: [{ from: 0, to: 180, level: 1.0 }],
+    rr: () => 22,
+    amp: () => 0.8,
+    expected: () => 'insufficient',
+  },
+];
+
+export const getScenario = (id) => SCENARIOS.find((s) => s.id === id);

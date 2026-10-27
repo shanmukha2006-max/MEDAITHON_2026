@@ -1,0 +1,5 @@
+{
+  "_comment": "Optional. Copy to breatheguard-config.json next to index.html on your host to configure connected mode without rebuilding. Both values are PUBLIC (anon key). Never put a service-role or AI key here.",
+  "supabaseUrl": "https://YOUR-PROJECT-REF.supabase.co",
+  "supabaseAnonKey": "your-anon-public-key"
+}
